@@ -39,10 +39,10 @@ import Data.Foldable (for_, foldrM)
 import Data.Int
 import Data.Id
 import Data.List1 (list1)
-import Data.List (partition)
+import Data.List (partition, find)
 import Data.Maybe (catMaybes, isJust)
 import Data.Range
-import Data.Time.Clock (getCurrentTime)
+import Data.Time.Clock (getCurrentTime, UTCTime)
 import Data.Traversable (mapM)
 import Data.Set (fromList, toList)
 import Galley.App
@@ -243,24 +243,38 @@ uncheckedAddTeamMember (tid ::: req ::: _) = do
 
 updateTeamMember :: UserId ::: ConnId ::: TeamId ::: Request ::: JSON ::: JSON
                  -> Galley Response
-updateTeamMember (zusr ::: zcon ::: tid ::: req ::: _) =
-  updateTeamMember' zusr zcon tid req >> pure empty
+updateTeamMember (zusr ::: zcon ::: tid ::: req ::: _) = do
+  targetMember <- view ntmNewTeamMember <$> fromBody req invalidPayload
+  let getTeam tid = Data.team tid >>= ifNothing teamNotFound
+  updateTeamMember' zusr zcon tid targetMember getTeam Data.teamMembers Data.updateTeamMember Journal.teamUpdate push1 (liftIO getCurrentTime)
+  pure empty
 
-updateTeamMember' :: UserId
+updateTeamMember' :: (Monad m, MonadThrow m)
+                  => UserId
                   -> ConnId
                   -> TeamId
-                  -> Request
-                  -> Galley ()
-updateTeamMember' zusr zcon tid req = do
-    -- the team member to be updated
-    targetMember <- view ntmNewTeamMember <$> fromBody req invalidPayload
+                  -> TeamMember
+                  -> (TeamId -> m TeamData)
+                  -> (TeamId -> m [TeamMember])
+                  -> (TeamId -> UserId -> Permissions -> m ())
+                  -> (TeamId -> [TeamMember] -> m ())
+                  -> (Push -> m ())
+                  -> m UTCTime
+                  -> m ()
+updateTeamMember' zusr zcon tid targetMember getTeam getMembers updateMember updateJournal doPush getTime = do
+    -- the requested permission change
     let targetId          = targetMember^.userId
         targetPermissions = targetMember^.permissions
 
     -- get the team and verify permissions
-    team    <- tdTeam <$> (Data.team tid >>= ifNothing teamNotFound)
-    members <- Data.teamMembers tid
-    user    <- permissionCheck zusr SetMemberPermissions members
+    team    <- tdTeam <$> getTeam tid
+    members <- getMembers tid
+    user <- case find ((zusr ==) . view userId) members of
+      Just m -> return m
+      Nothing -> throwM noTeamMember
+
+    unless (user `hasPermission` SetMemberPermissions) $
+      throwM (operationDenied SetMemberPermissions)
 
     -- user may not elevate permissions
     targetPermissions `ensureNotElevated` user
@@ -275,13 +289,13 @@ updateTeamMember' zusr zcon tid req = do
         throwM noOtherOwner
 
     -- update target in Cassandra
-    Data.updateTeamMember tid targetId targetPermissions
+    updateMember tid targetId targetPermissions
 
     let otherMembers = filter (\u -> u^.userId /= targetId) members
         updatedMembers = targetMember : otherMembers
 
     -- note the change in the journal
-    when (team^.teamBinding == Binding) $ Journal.teamUpdate tid updatedMembers
+    when (team^.teamBinding == Binding) $ updateJournal tid updatedMembers
 
     -- inform members of the team about the change
     -- some (privileged) users will be informed about which change was applied
@@ -293,15 +307,16 @@ updateTeamMember' zusr zcon tid req = do
         privilegedRecipients   = membersToRecipients Nothing privileged
         unPrivilegedRecipients = membersToRecipients Nothing unprivileged
 
-    now <- liftIO getCurrentTime
+    now <- getTime
+
     let ePriv  = newEvent MemberUpdate tid now & eventData ?~ privilegedUpdate
         eUPriv = newEvent MemberUpdate tid now & eventData ?~ unPrivilegedUpdate
 
     -- push to all members (user is privileged)
     let pushPriv   = newPush zusr (TeamEvent ePriv) $ privilegedRecipients
         pushUnPriv = newPush zusr (TeamEvent eUPriv) $ unPrivilegedRecipients
-    for_ pushPriv   $ \p -> push1 $ p & pushConn .~ Just zcon
-    for_ pushUnPriv $ \p -> push1 $ p & pushConn .~ Just zcon
+    for_ pushPriv   $ \p -> doPush $ p & pushConn .~ Just zcon
+    for_ pushUnPriv $ \p -> doPush $ p & pushConn .~ Just zcon
 
 deleteTeamMember :: UserId ::: ConnId ::: TeamId ::: UserId ::: Request ::: Maybe JSON ::: JSON -> Galley Response
 deleteTeamMember (zusr::: zcon ::: tid ::: remove ::: req ::: _ ::: _) = do
@@ -423,7 +438,7 @@ ensureNonBindingTeam tid = do
 
 -- ensure that the permissions are not "greater" than the user's copy permissions
 -- this is used to ensure users cannot "elevate" permissions
-ensureNotElevated :: Permissions -> TeamMember -> Galley ()
+ensureNotElevated :: (Applicative m, MonadThrow m) => Permissions -> TeamMember -> m ()
 ensureNotElevated targetPermissions member =
   unless ((targetPermissions^.self)
            `Set.isSubsetOf` (member^.permissions.copy)) $
