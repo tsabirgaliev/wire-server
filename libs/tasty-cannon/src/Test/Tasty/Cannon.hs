@@ -26,6 +26,7 @@ module Test.Tasty.Cannon
     , awaitMatch
     , awaitMatchN
     , assertMatch
+    , assertMatch1
     , assertMatch_
     , assertMatchN
     , assertSuccess
@@ -249,6 +250,39 @@ assertNoEvent t ww = do
         either (const $ pure ()) (liftIO . f)
   where
     f n = assertFailure $ "unexpected notification received: " ++ show n
+
+-----------------------------
+-- with labels
+
+awaitMatch1 :: String
+            -> Timeout
+            -> WebSocket
+            -> (Notification -> Assertion)
+            -> Assertion
+awaitMatch1 label t ws mkAssert = go [] []
+  where
+    go buf errs = do
+        maybeNotification <- await t ws
+        case maybeNotification of
+            Just notification -> do
+                refill buf
+                mkAssert notification
+              `catchAll` \e -> case asyncExceptionFromException e of
+                Just  x -> assertFailure $ show (x :: SomeAsyncException)
+                Nothing -> let e' = MatchFailure (SomeException e)
+                           in go (notification : buf) (e' : errs)
+            Nothing -> do
+                refill buf
+                assertFailure $ label ++ "\n" ++ show (MatchTimeout errs)
+
+    refill = mapM_ (liftIO . atomically . writeTChan (wsChan ws))
+
+assertMatch1 :: String
+            -> Timeout
+            -> WebSocket
+            -> (Notification -> Assertion)
+            -> Assertion
+assertMatch1 label t ws f = awaitMatch1 label t ws f
 
 -----------------------------------------------------------------------------
 -- Unpacking Notifications
