@@ -243,7 +243,15 @@ uncheckedAddTeamMember (tid ::: req ::: _) = do
 
 updateTeamMember :: UserId ::: ConnId ::: TeamId ::: Request ::: JSON ::: JSON
                  -> Galley Response
-updateTeamMember (zusr::: zcon ::: tid ::: req ::: _) = do
+updateTeamMember (zusr ::: zcon ::: tid ::: req ::: _) =
+  updateTeamMember' zusr zcon tid req >> pure empty
+
+updateTeamMember' :: UserId
+                  -> ConnId
+                  -> TeamId
+                  -> Request
+                  -> Galley ()
+updateTeamMember' zusr zcon tid req = do
     -- the team member to be updated
     targetMember <- view ntmNewTeamMember <$> fromBody req invalidPayload
     let targetId          = targetMember^.userId
@@ -294,7 +302,6 @@ updateTeamMember (zusr::: zcon ::: tid ::: req ::: _) = do
         pushUnPriv = newPush zusr (TeamEvent eUPriv) $ unPrivilegedRecipients
     for_ pushPriv   $ \p -> push1 $ p & pushConn .~ Just zcon
     for_ pushUnPriv $ \p -> push1 $ p & pushConn .~ Just zcon
-    pure empty
 
 deleteTeamMember :: UserId ::: ConnId ::: TeamId ::: UserId ::: Request ::: Maybe JSON ::: JSON -> Galley Response
 deleteTeamMember (zusr::: zcon ::: tid ::: remove ::: req ::: _ ::: _) = do
