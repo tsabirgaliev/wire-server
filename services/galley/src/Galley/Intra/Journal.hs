@@ -10,6 +10,8 @@ module Galley.Intra.Journal
     , bytes
     , evData
     , nowInt
+
+    , JournalWrite (..)
     ) where
 
 import Control.Lens
@@ -32,6 +34,12 @@ import qualified Galley.Aws as Aws
 -- [Note: journaling]
 -- Team journal operations to SQS are a no-op when the service
 -- is started without journaling arguments
+
+class JournalWrite m where
+  updateTeam :: TeamId -> [TeamMember] -> m ()
+
+instance JournalWrite Galley where
+  updateTeam = teamUpdate
 
 teamActivate :: TeamId -> [TeamMember] -> Maybe TeamCreationTime -> Galley ()
 teamActivate tid mems time = journalEvent TeamEvent'TEAM_ACTIVATE tid (Just $ evData mems) time

@@ -13,6 +13,8 @@ module Galley.Intra.Push
     , push1
     , pushSome
 
+    , Pusher (..)
+
     , PushEvent (..)
 
       -- * Push Configuration
@@ -121,6 +123,12 @@ newPush1 from e rr = Push
 newPush :: UserId -> PushEvent -> [Recipient] -> Maybe Push
 newPush _ _ []     = Nothing
 newPush u e (r:rr) = Just $ newPush1 u e (list1 r rr)
+
+class Pusher m where
+  pushIt :: Push -> m ()
+
+instance Pusher Galley where
+  pushIt = push1
 
 -- | Asynchronously send a single push, chunking it into multiple
 -- requests if there are more than 128 recipients.

@@ -11,6 +11,8 @@ module Galley.Data
     , schemaVersion
 
     -- * Teams
+    , TeamRead (..)
+    , TeamWrite (..)
     , addTeamMember
     , updateTeamMember
     , createTeam
@@ -117,6 +119,20 @@ schemaVersion :: Int32
 schemaVersion = 24
 
 -- Teams --------------------------------------------------------------------
+
+class TeamRead m where
+  getTeam    :: TeamId -> m (Maybe TeamData)
+  getMembers :: TeamId -> m [TeamMember]
+
+class TeamWrite m where
+  updateMemberW :: TeamId -> UserId -> Permissions -> m ()
+
+instance TeamRead Galley where
+  getTeam = team
+  getMembers = teamMembers
+
+instance TeamWrite Galley where
+  updateMemberW = updateTeamMember
 
 team :: MonadClient m => TeamId -> m (Maybe TeamData)
 team tid =

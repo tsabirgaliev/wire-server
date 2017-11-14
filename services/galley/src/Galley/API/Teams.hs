@@ -39,8 +39,8 @@ import Data.Foldable (for_, foldrM)
 import Data.Int
 import Data.Id
 import Data.List1 (list1)
-import Data.List (partition)
-import Data.Maybe (catMaybes, isJust)
+import Data.List (partition, find)
+import Data.Maybe (catMaybes, isJust, fromMaybe)
 import Data.Range
 import Data.Time.Clock (getCurrentTime)
 import Data.Traversable (mapM)
@@ -243,24 +243,39 @@ uncheckedAddTeamMember (tid ::: req ::: _) = do
 
 updateTeamMember :: UserId ::: ConnId ::: TeamId ::: Request ::: JSON ::: JSON
                  -> Galley Response
-updateTeamMember (zusr ::: zcon ::: tid ::: req ::: _) =
-  updateTeamMember' zusr zcon tid req >> pure empty
+updateTeamMember (zusr ::: zcon ::: tid ::: req ::: _) = do
+    targetMember <- view ntmNewTeamMember <$> fromBody req invalidPayload
+    updateTeamMember' zusr zcon tid targetMember
+    pure empty
 
-updateTeamMember' :: UserId
+updateTeamMember' :: ( MonadIO m
+                     , MonadThrow m
+                     , Data.TeamRead m
+                     , Data.TeamWrite m
+                     , Journal.JournalWrite m
+                     , Pusher m
+                     )
+                  => UserId
                   -> ConnId
                   -> TeamId
-                  -> Request
-                  -> Galley ()
-updateTeamMember' zusr zcon tid req = do
+                  -> TeamMember
+                  -> m ()
+updateTeamMember' zusr zcon tid targetMember = do
     -- the team member to be updated
-    targetMember <- view ntmNewTeamMember <$> fromBody req invalidPayload
     let targetId          = targetMember^.userId
         targetPermissions = targetMember^.permissions
 
     -- get the team and verify permissions
-    team    <- tdTeam <$> (Data.team tid >>= ifNothing teamNotFound)
-    members <- Data.teamMembers tid
-    user    <- permissionCheck zusr SetMemberPermissions members
+    mTeam   <- fmap tdTeam <$> Data.getTeam tid
+    members <- Data.getMembers tid
+    --user    <- permissionCheck zusr SetMemberPermissions members
+
+    user <- case find ((zusr ==) . view userId) members of
+              Just m -> return m
+              Nothing -> throwM noTeamMember
+
+    let team = undefined
+    --team <- fromMaybe (throwM teamNotFound) (pure mTeam)
 
     -- user may not elevate permissions
     targetPermissions `ensureNotElevated` user
@@ -275,13 +290,13 @@ updateTeamMember' zusr zcon tid req = do
         throwM noOtherOwner
 
     -- update target in Cassandra
-    Data.updateTeamMember tid targetId targetPermissions
+    Data.updateMemberW tid targetId targetPermissions
 
     let otherMembers = filter (\u -> u^.userId /= targetId) members
         updatedMembers = targetMember : otherMembers
 
     -- note the change in the journal
-    when (team^.teamBinding == Binding) $ Journal.teamUpdate tid updatedMembers
+    when (team^.teamBinding == Binding) $ Journal.updateTeam tid updatedMembers
 
     -- inform members of the team about the change
     -- some (privileged) users will be informed about which change was applied
@@ -300,8 +315,9 @@ updateTeamMember' zusr zcon tid req = do
     -- push to all members (user is privileged)
     let pushPriv   = newPush zusr (TeamEvent ePriv) $ privilegedRecipients
         pushUnPriv = newPush zusr (TeamEvent eUPriv) $ unPrivilegedRecipients
-    for_ pushPriv   $ \p -> push1 $ p & pushConn .~ Just zcon
-    for_ pushUnPriv $ \p -> push1 $ p & pushConn .~ Just zcon
+    for_ pushPriv   $ \p -> pushIt $ p & pushConn .~ Just zcon
+    for_ pushUnPriv $ \p -> pushIt $ p & pushConn .~ Just zcon
+
 
 deleteTeamMember :: UserId ::: ConnId ::: TeamId ::: UserId ::: Request ::: Maybe JSON ::: JSON -> Galley Response
 deleteTeamMember (zusr::: zcon ::: tid ::: remove ::: req ::: _ ::: _) = do
@@ -423,7 +439,7 @@ ensureNonBindingTeam tid = do
 
 -- ensure that the permissions are not "greater" than the user's copy permissions
 -- this is used to ensure users cannot "elevate" permissions
-ensureNotElevated :: Permissions -> TeamMember -> Galley ()
+ensureNotElevated :: (MonadThrow m) => Permissions -> TeamMember -> m ()
 ensureNotElevated targetPermissions member =
   unless ((targetPermissions^.self)
            `Set.isSubsetOf` (member^.permissions.copy)) $
