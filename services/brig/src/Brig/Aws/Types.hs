@@ -46,16 +46,19 @@ import qualified Aws.Sqs      as Aws
 
 data Region = Ireland
             | Frankfurt
+            | Local
 
 instance FromByteString Region where
     parser = parser >>= \t -> case t of
         "eu-west-1"    -> pure Ireland
         "eu-central-1" -> pure Frankfurt
+        "local"        -> pure Local
         x              -> fail $ "Unsupported region " <> unpack x
 
 instance Show Region where
     show Ireland   = "eu-west-1"
     show Frankfurt = "eu-central-1"
+    show Local     = "local"
 
 instance FromJSON Region where
     parseJSON = withText "aws-region" $
@@ -111,6 +114,30 @@ config reg acc squ iqu blt pkt =
         iqq = Aws.QueueName (fromInternalQueue iqu) (fromAccount acc)
     in Config ses sqs ddb sqq iqq blt pkt
   where
+    locationLocal :: Text
+    locationLocal = "localhost"
+
+    sqsEndpointLocal :: Aws.Endpoint
+    sqsEndpointLocal
+        = Aws.Endpoint {
+            Aws.endpointHost = "localhost"
+          , Aws.endpointDefaultLocationConstraint = locationLocal
+          , Aws.endpointAllowedLocationConstraints = [locationLocal]
+          }
+
+    ddbLocal :: Aws.Region
+    ddbLocal = Aws.Region "localhost" "local"
+
+    regionSettings Local =
+        ( Aws.SqsConfiguration {
+                Aws.sqsProtocol = Aws.HTTP
+              , Aws.sqsEndpoint = sqsEndpointLocal
+              , Aws.sqsPort = 4576 -- default localstack port TODO: make port configurable
+              , Aws.sqsUseUri = False
+              , Aws.sqsDefaultExpiry = 15*60
+              }
+        , Aws.ddbHttp ddbLocal
+        )
     regionSettings Ireland =
         ( Aws.sqs Aws.HTTPS Aws.sqsEndpointEu False
         , Aws.ddbHttps Aws.ddbEuWest1
@@ -119,6 +146,7 @@ config reg acc squ iqu blt pkt =
         ( Aws.sqs Aws.HTTPS Aws.sqsEndpointEu { Aws.endpointHost = "eu-central-1.queue.amazonaws.com" } False
         , Aws.ddbHttps Aws.ddbEuCentral1
         )
+
 
 -------------------------------------------------------------------------------
 -- Notifications
