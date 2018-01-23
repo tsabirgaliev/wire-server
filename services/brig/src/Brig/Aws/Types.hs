@@ -105,13 +105,17 @@ config :: Region
        -> Config
 config reg acc squ iqu blt pkt =
     let (sqs, ddb) = regionSettings reg
+        account = case reg of
+            Local -> "queue"
+            _ -> fromAccount acc
         -- Note that `sesUsEast1` acts as a backup, in case `sesEuWest1` is down for some reason
         -- https://github.com/wireapp/wire-server/blob/develop/services/brig/src/Brig/Aws.hs#L144-L149
         -- Currently SES is only available in eu-west-1, us-east-1 and us-west-2 so not allowing it
         -- to be configured and is hardcoded to `eu-west-1` and `us-east-1` as a fallback
         ses = [Aws.sesHttpsPost Aws.sesEuWest1, Aws.sesHttpsPost Aws.sesUsEast1]
-        sqq = Aws.QueueName (fromSesQueue squ) (fromAccount acc)
-        iqq = Aws.QueueName (fromInternalQueue iqu) (fromAccount acc)
+        -- ses = [Aws.SesConfiguration Aws.PostQuery "localhost"] -- TODO: this doesn't work, as no way to specify a port or use http rather than https.
+        sqq = Aws.QueueName (fromSesQueue squ) account
+        iqq = Aws.QueueName (fromInternalQueue iqu) account
     in Config ses sqs ddb sqq iqq blt pkt
   where
     locationLocal :: Text
