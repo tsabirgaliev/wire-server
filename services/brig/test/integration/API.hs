@@ -75,7 +75,7 @@ tests conf p b c g = do
             , test p "post /register - 201 existing activation" $ testCreateAccountPendingActivationKey b
             , test p "post /register - 409 conflict"            $ testCreateUserConflict b
             , test p "post /register - 400"                     $ testCreateUserInvalidPhone b
-            , test p "post /register - 403"                     $ testCreateUserBlacklist b
+            , test p "post /register - 403 blacklist"           $ testCreateUserBlacklist b
             , test p "post /activate - 200/204 + expiry"        $ testActivateWithExpiry b
             , test p "get /users/:id - 404"                     $ testNonExistingUser b
             , test p "get /users/:id - 200"                     $ testExistingUser b

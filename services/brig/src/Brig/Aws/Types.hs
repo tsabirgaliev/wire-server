@@ -136,7 +136,7 @@ config reg acc squ iqu blt pkt =
               , Aws.sqsUseUri = False
               , Aws.sqsDefaultExpiry = 15*60
               }
-        , Aws.ddbHttp ddbLocal
+        , Aws.DdbConfiguration ddbLocal Aws.HTTP (Just 4569) -- default localstack port TODO: make configurable
         )
     regionSettings Ireland =
         ( Aws.sqs Aws.HTTPS Aws.sqsEndpointEu False
