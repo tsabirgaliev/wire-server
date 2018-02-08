@@ -89,7 +89,7 @@ data ConnectionError
         -- ^ An attempt at creating a connection with another user from the same binding team.
 
 data PasswordResetError
-    = PasswordResetInProgress
+    = PasswordResetInProgress (Maybe Timeout)
     | InvalidPasswordResetKey
     | InvalidPasswordResetCode
 
