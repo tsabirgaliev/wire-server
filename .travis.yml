@@ -6,13 +6,14 @@ services:
 env:
   global:
     - DOCKER_TAG=0.1.${TRAVIS_BUILD_NUMBER}
+    - DOCKER_PUSH=1
   matrix:
     - TARGET=deps
     - TARGET=builder
 
 script:
   - docker login -u ${DOCKER_USERNAME} -p ${DOCKER_PASSWORD}
-  - DOCKER_PUSH=1 make "docker-${TARGET}"
+  - travis_wait 120 make "docker-${TARGET}"
 
 notifications:
   email: false
